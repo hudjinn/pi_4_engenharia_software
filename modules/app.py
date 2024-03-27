@@ -1,21 +1,23 @@
 import os
 import json
 
-from flask import Flask, render_template, request, redirect, url_for, session
+from flask import Flask, render_template, request, redirect, url_for, session, flash
 import requests
 
 
 app = Flask(__name__, static_url_path='/static')
-text_path = '/home/pi_4_engenharia_software/SysAdm/modules/locate'
-app.secret_key = os.urandom(24)
 
-# Simulação de dados de usuários
-users = {
-    "user1@example.com": {
-        "cpf": "12345678900",
-        "data_nasc": "1990-01-01"
-    }
-}
+# Caminho absoluto do arquivo em execução
+caminho_absoluto = os.path.abspath(__file__)
+
+# Diretório do arquivo em execução
+root = os.path.dirname(caminho_absoluto)
+
+text_path =  root + '/locate'
+
+#API JAVA
+app.api = 'http://localhost:8080/'
+
 
 @app.before_request
 def before_request():
@@ -30,7 +32,6 @@ def before_request():
 @app.route('/set_language', methods=['POST'])
 def set_language():
     language = request.form.get('language')
-    print(language)
     if language:
         session['language'] = language
         # Carregar as traduções para o idioma escolhido e salvar na sessão.
@@ -56,29 +57,50 @@ def login_screen():
         email = request.form['email_login']
         senha = request.form['senha_login']
         
-        # Corrigir
-        response = requests.post('http://localhost:8080/login', json={'email': email, 'senha': senha})
+        # TODO integração com JAVA via API
+
+        response = requests.post( app.api, json={'email': email, 'senha': senha})
 
         # Teste
         response.ok = True
 
+        # TODO inserir quantidade de tentativas
         if response.ok:
             # Obter permissões CRUD e enviar POST para admin
             return redirect(url_for('admin_screen'))
         else:
             # Se a API Java responder com erro, retorne à tela de login com uma mensagem de erro
-            text = read_translation('pt_BR')
             return render_template('login_screen.html', text=session['text'], error='Login inválido.')
         
     # Se o método for GET, apenas exiba a tela de login.
     return render_template('login_screen.html', text=session['text'])    
 
-
-
 # Rota para a página de cadastro
-@app.route('/create_account')
+@app.route('/create_account', methods=['GET', 'POST'])
 def create_account_screen():
+    if request.method == 'POST':
+        # Captura os dados do formulário
+        user_data = {
+            "nome": request.form['nome_cad'],
+            "email": request.form['email_cad'],
+            "data_nasc": request.form['data_nasc_cad'],
+            "cpf": request.form['cpf_cad'],
+            "senha": request.form['senha_cad']
+        }
 
+        # Envia os dados do usuário para a API
+        response = requests.post('http://localhost:8080/create', json=user_data)
+
+        if response.status_code == 201:
+            # Usuário criado com sucesso, redirecionar para a tela de login ou outra página
+            return redirect(url_for('login_screen'))
+        else:
+            # Trata erros possíveis
+            flash("Erro ao criar usuário: " + response.json().get("mensagem", ""))
+             # Se a API Java responder com erro, retorne à tela de login com uma mensagem de erro
+            return render_template('login_screen.html', text=session['text'], error='Login inválido.')
+
+    # Se o método for GET ou se o cadastro falhar, mostra a tela de cadastro novamente
     return render_template('create_acc_screen.html', text=session['text'])
 
 # Rota para a página de recuperação de senha
@@ -89,16 +111,18 @@ def recover_password():
         email = request.form['email_recovery']
         cpf = request.form['cpf_recovery']
         data_nasc = request.form['data_nasc_recovery']
-        # Verificar se os dados fornecidos correspondem a um usuário no banco
-        if email in users and users[email]['cpf'] == cpf and users[email]['data_nasc'] == data_nasc:
-            # Renderizar a página de alteração de senha, passando o e-mail como parâmetro
-            # TODO Consulta no banco
-            return redirect(url_for('change_password', email=email))
+
+        # TODO checar na API validade
+        response = requests.post(app.api + '/check', json={'email': email,
+                                                           'cpf': cpf,
+                                                           'data_nasc': data_nasc})
+        if response.ok:
+            return redirect(url_for('change_password.html'), text=session['text'])
         else:
-            # Se os dados estiverem incorretos, redirecionar de volta para a página de recuperação de senha
-            return redirect(url_for('recover_password'))
-    else:
-        return render_template('recover_password.html', text=session['text'])
+            return render_template('recover_password.html', text=session['text'], error='Dados inválido.')
+
+    
+    return render_template('recover_password.html', text=session['text'])
 
 # Rota para a página de alteração de senha
 @app.route('/change_password/<email>', methods=['GET', 'POST'])
@@ -109,7 +133,7 @@ def change_password(email):
         nova_senha = request.form['nova_senha']
         confirma_senha = request.form['confirma_senha']
         if nova_senha == confirma_senha:
-            return redirect(url_for('password_changed', email=email))
+            return redirect(url_for('password_changed', text=session['text'], email=email))
         else:
             # Senhas não coincidem, exibir mensagem de erro
             error_message = "As senhas digitadas não coincidem."
